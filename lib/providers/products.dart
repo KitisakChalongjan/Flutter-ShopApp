@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:shopapp/models/http_exception.dart';
 import 'product.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -51,6 +54,11 @@ class Products with ChangeNotifier {
   //   notifyListeners();
   // }
 
+  final String authToken;
+  final String userId;
+
+  Products(this.authToken, this.userId, this._items);
+
   List<Product> get items {
     // if (_showFavoritesOnly == true) {
     //   return _items.where((prod) => prod.isFavorite).toList();
@@ -66,12 +74,36 @@ class Products with ChangeNotifier {
     return _items.firstWhere((prod) => prod.id == id);
   }
 
-  Future<void> fetchAndSetproducts() async {
-    final url = Uri.https(
-        'flutter-udemy-e43de-default-rtdb.firebaseio.com', '/products.json');
+  Future<void> fetchAndSetproducts([bool filterByUser = false]) async {
+    var _params = {
+      'auth': '$authToken',
+    };
+    if (filterByUser == true) {
+      _params = {
+        'auth': '$authToken',
+        'orderBy': '"creatorId"',
+        'equalTo': '"$userId"',
+      };
+    }
+
+    var url = Uri.https(
+      'flutter-udemy-e43de-default-rtdb.firebaseio.com',
+      '/products.json',
+      _params,
+    );
     try {
       final response = await http.get(url);
       final extractedData = json.decode(response.body) as Map<String, dynamic>;
+      if (extractedData == null) {
+        return;
+      }
+      url = Uri.https(
+        'flutter-udemy-e43de-default-rtdb.firebaseio.com',
+        '/userFavorites/$userId.json',
+        {'auth': '$authToken'},
+      );
+      final favoriteResponse = await http.get(url);
+      final favoriteData = json.decode(favoriteResponse.body);
       final List<Product> loadedProduct = [];
       extractedData.forEach((prodId, prodData) {
         loadedProduct.add(Product(
@@ -79,7 +111,8 @@ class Products with ChangeNotifier {
           title: prodData['title'],
           price: prodData['price'],
           description: prodData['description'],
-          isFavorite: prodData['isFavorite'],
+          isFavorite:
+              favoriteData == null ? false : favoriteData[prodId] ?? false,
           imageUrl: prodData['imageUrl'],
         ));
       });
@@ -92,7 +125,10 @@ class Products with ChangeNotifier {
 
   Future<void> addProduct(Product product) async {
     final url = Uri.https(
-        'flutter-udemy-e43de-default-rtdb.firebaseio.com', '/products.json');
+      'flutter-udemy-e43de-default-rtdb.firebaseio.com',
+      '/products.json',
+      {'auth': '$authToken'},
+    );
     try {
       final response = await http.post(
         url,
@@ -101,7 +137,7 @@ class Products with ChangeNotifier {
           'description': product.description,
           'imageUrl': product.imageUrl,
           'price': product.price,
-          'isFavorite': product.isFavorite,
+          'creatorId': userId,
         }),
       );
       final newProduct = Product(
@@ -123,9 +159,12 @@ class Products with ChangeNotifier {
   void updateProduct(String id, Product newProduct) async {
     final prodIndex = _items.indexWhere((prod) => prod.id == id);
     if (prodIndex >= 0) {
-      final url = Uri.https('flutter-udemy-e43de-default-rtdb.firebaseio.com',
-          '/products/${id}.json');
-          
+      final url = Uri.https(
+        'flutter-udemy-e43de-default-rtdb.firebaseio.com',
+        '/products/${id}.json',
+        {'auth': '$authToken'},
+      );
+
       await http.patch(url,
           body: json.encode({
             'title': newProduct.title,
@@ -140,8 +179,19 @@ class Products with ChangeNotifier {
     }
   }
 
-  void deleteProduct(String id) {
-    _items.removeWhere((prod) => prod.id == id);
+  Future<void> deleteProduct(String id) async {
+    final url = Uri.https('flutter-udemy-e43de-default-rtdb.firebaseio.com',
+        '/products/${id}.json');
+    final exitingProductIndex = _items.indexWhere((prod) => prod.id == id);
+    var exitingProduct = _items[exitingProductIndex];
+    _items.removeAt(exitingProductIndex);
     notifyListeners();
+    final response = await http.delete(url);
+    if (response.statusCode > 400) {
+      _items.insert(exitingProductIndex, exitingProduct);
+      notifyListeners();
+      throw HttpException('Could not delete product');
+    }
+    exitingProduct = null;
   }
 }
